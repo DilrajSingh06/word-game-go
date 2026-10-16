@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: word-game
+  namespace: qa
+  labels:
+    app: word-game
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: word-game
+  template:
+    metadata:
+      labels:
+        app: word-game
+    spec:
+      imagePullSecrets:
+        - name: dockerhub
+      containers:
+        - name: word-game
+          image: dilrajsingh02/word-game-go:qa
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              value: "postgres://wordgame:wordgame_dev_only@postgres:5432/wordgame?sslmode=disable"
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: word-game
+  namespace: qa
+  labels:
+    app: word-game
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: word-game

@@ -1,0 +1,170 @@
+
+version: 2.1
+
+jobs:
+  test_and_publish_qa:
+    docker:
+      - image: cimg/go:1.22
+        environment:
+          DATABASE_URL: postgres://wordgame:wordgame_dev_only@localhost:5432/wordgame?sslmode=disable
+          REDIS_URL: redis://localhost:6379/0
+          PORT: "8080"
+      - image: postgres:16-alpine
+        environment:
+          POSTGRES_DB: wordgame
+          POSTGRES_USER: wordgame
+          POSTGRES_PASSWORD: wordgame_dev_only
+      - image: redis:7-alpine
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install test tools
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client curl
+            go install github.com/zricethezav/gitleaks/v8@latest
+            echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> "$BASH_ENV"
+            curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$HOME/.local/bin"
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$BASH_ENV"
+
+      - run:
+          name: Wait for PostgreSQL and Redis
+          command: |
+            for i in $(seq 1 30); do
+              pg_isready -h localhost -U wordgame -d wordgame && break
+              sleep 2
+            done
+            pg_isready -h localhost -U wordgame -d wordgame
+            for i in $(seq 1 30); do
+              if (echo > /dev/tcp/localhost/6379) >/dev/null 2>&1; then
+                break
+              fi
+              sleep 2
+            done
+
+      - run:
+          name: Scan repository for secrets
+          command: |
+            gitleaks git . --redact --exit-code 1
+
+      - run:
+          name: Lint Go code
+          command: golangci-lint run ./...
+
+      - run:
+          name: Run unit tests
+          command: go test ./... -cover
+
+      - run:
+          name: Apply database migrations
+          command: |
+            for f in migrations/*.sql; do
+              PGPASSWORD=wordgame_dev_only psql \
+                -h localhost -U wordgame -d wordgame \
+                -v ON_ERROR_STOP=1 -f "$f"
+            done
+
+      - run:
+          name: Integration test application with PostgreSQL and Redis
+          command: |
+            go build -o /tmp/word-game .
+            /tmp/word-game > /tmp/word-game.log 2>&1 &
+            APP_PID=$!
+            trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+
+            for i in $(seq 1 30); do
+              if curl -fsS http://localhost:8080/health; then
+                break
+              fi
+              sleep 2
+            done
+
+            curl -fsS http://localhost:8080/health
+            curl -fsS http://localhost:8080/game?player=ci-test
+            cat /tmp/word-game.log
+
+      - setup_remote_docker:
+          docker_layer_caching: true
+
+      - run:
+          name: Build and publish QA image
+          command: |
+            echo "$DOCKERHUB_TOKEN" | docker login \
+              --username "$DOCKERHUB_USER" --password-stdin
+
+            IMAGE="$DOCKERHUB_USER/word-game-go"
+            SHORT_SHA=$(echo "$CIRCLE_SHA1" | cut -c1-7)
+
+            docker build -t "$IMAGE:qa" \
+              -t "$IMAGE:main-$SHORT_SHA" .
+
+            docker push "$IMAGE:qa"
+            docker push "$IMAGE:main-$SHORT_SHA"
+
+  publish_stage:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Build and publish staging image
+          command: |
+            echo "$DOCKERHUB_TOKEN" | docker login \
+              --username "$DOCKERHUB_USER" --password-stdin
+
+            IMAGE="$DOCKERHUB_USER/word-game-go"
+            SHORT_SHA=$(echo "$CIRCLE_SHA1" | cut -c1-7)
+
+            docker build -t "$IMAGE:stage" \
+              -t "$IMAGE:staging-$SHORT_SHA" .
+
+            docker push "$IMAGE:stage"
+            docker push "$IMAGE:staging-$SHORT_SHA"
+
+  publish_prod:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Build and publish production image
+          command: |
+            echo "$DOCKERHUB_TOKEN" | docker login \
+              --username "$DOCKERHUB_USER" --password-stdin
+
+            IMAGE="$DOCKERHUB_USER/word-game-go"
+            SHORT_SHA=$(echo "$CIRCLE_SHA1" | cut -c1-7)
+
+            docker build -t "$IMAGE:prod" \
+              -t "$IMAGE:prod-$SHORT_SHA" .
+
+            docker push "$IMAGE:prod"
+            docker push "$IMAGE:prod-$SHORT_SHA"
+
+workflows:
+  qa_pipeline:
+    jobs:
+      - test_and_publish_qa:
+          filters:
+            branches:
+              only: main
+
+  staging_pipeline:
+    jobs:
+      - publish_stage:
+          filters:
+            branches:
+              only: staging
+
+  production_pipeline:
+    jobs:
+      - publish_prod:
+          filters:
+            branches:
+              only: prod

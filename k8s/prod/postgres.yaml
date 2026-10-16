@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: prod
+data:
+  001_create_tables.sql: |
+    CREATE TABLE IF NOT EXISTS words (
+        word TEXT PRIMARY KEY CHECK (length(word) = 5)
+    );
+
+    CREATE TABLE IF NOT EXISTS results (
+        id      SERIAL PRIMARY KEY,
+        day     DATE    NOT NULL,
+        player  TEXT    NOT NULL,
+        guesses INT     NOT NULL,
+        won     BOOLEAN NOT NULL,
+        UNIQUE (day, player)
+    );
+
+    CREATE INDEX IF NOT EXISTS results_day ON results (day);
+
+  002_seed_words.sql: |
+    INSERT INTO words (word) VALUES
+        ('CRANE'),('SLATE'),('AUDIO'),('ROAST'),('PLUMB'),
+        ('GHOST'),('MIRTH'),('QUILT'),('VOWEL'),('BRAVE'),
+        ('CHALK'),('DWELL'),('FROST'),('GRIME'),('HOUND'),
+        ('IVORY'),('JOKER'),('KNEEL'),('LUMEN'),('MANGO'),
+        ('NUDGE'),('OPERA'),('PRIZE'),('QUERY'),('RIVET'),
+        ('SHINE'),('TWIST'),('UNITY'),('VAPOR'),('WHARF'),
+        ('EERIE'),('ABBEY'),('LLAMA'),('SASSY'),('TEPEE')
+    ON CONFLICT DO NOTHING;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: prod
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "wordgame"
+            - name: POSTGRES_USER
+              value: "wordgame"
+            - name: POSTGRES_PASSWORD
+              value: "wordgame_dev_only"
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "wordgame", "-d", "wordgame"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: prod
+  labels:
+    app: postgres
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
