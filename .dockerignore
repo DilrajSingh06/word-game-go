@@ -1,0 +1,9 @@
+﻿.git
+.github
+.circleci
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+*.log
