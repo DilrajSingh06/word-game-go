@@ -19,7 +19,7 @@ spec:
         - name: dockerhub
       containers:
         - name: word-game
-          image: DOCKERHUB_USER/word-game-go:prod
+          image: dilrajsingh02/word-game-go:prod
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
