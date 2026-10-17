@@ -124,3 +124,4 @@ feature itself.
 | `relation "..." does not exist` | Migrations did not run, or the app started before they finished. |
 | Build takes minutes every time | `COPY . .` is above your dependency install. |
 | CI cannot reach the database | In CircleCI service containers the host **is** `localhost` — the opposite of compose. |
+my name is dilraj singh
